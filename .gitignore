@@ -1,0 +1,13 @@
+# Folder Virtual Environment
+.venv/
+venv/
+
+# Folder Cache Python
+__pycache__/
+
+# File Model (yang menyebabkan error)
+*.pkl
+
+# File Data Besar (sebaiknya diabaikan juga)
+*.csv
+*.h5

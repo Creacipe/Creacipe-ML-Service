@@ -1,4 +1,4 @@
-# model.py
+# model.py (Final - Membaca dari dataset/train_data.csv)
 
 import pandas as pd
 import os
@@ -9,57 +9,62 @@ import pickle
 
 def build_model():
     """
-    Fungsi ini membaca data resep yang sudah diproses,
-    melatih model, dan menyimpan hasilnya.
+    Membaca data training (dataset/train_data.csv), melatih model,
+    dan menyimpan hasilnya ke dalam folder 'models/'.
     """
-    print("Memulai proses pembuatan model dari file 'dataset-final.csv'...")
-    
-    try:
-        # --- LANGKAH 1: MEMBACA DATA ---
-        # Membaca dataset yang sudah bersih dan memiliki kolom 'tags'.
-        df = pd.read_csv('dataset-final.csv')
-        if 'id' not in df.columns:
-            df['id'] = df.index + 1
-        
-        print(f"Berhasil membaca {len(df)} resep.")
+    # --- LANGKAH 1: TENTUKAN PATH & BACA DATA TRAINING ---
+    dataset_folder = 'dataset'
+    train_file = os.path.join(dataset_folder, 'train_data.csv') # Path ke data training
 
-        # --- LANGKAH 2: FEATURE ENGINEERING (MEMBENTUK INPUT) ---
-        # Membersihkan nilai kosong (NaN) dari kolom yang akan digunakan.
+    print(f"Memulai proses pembuatan model dari '{train_file}'...")
+
+    if not os.path.exists(train_file):
+        print(f"Error: File training '{train_file}' tidak ditemukan. Jalankan 'split_data.py' terlebih dahulu.")
+        return
+
+    try:
+        df = pd.read_csv(train_file)
+        if 'id' not in df.columns:
+            df['id'] = df.index + 1 # Buat ID sementara jika tidak ada
+        print(f"Berhasil membaca {len(df)} resep dari data training.")
+
+        # --- LANGKAH 2: FEATURE ENGINEERING ---
+        # Membersihkan nilai kosong.
         df['Ingredients'] = df['Ingredients'].fillna('')
+        # Kolom 'tags' seharusnya sudah dibuat oleh preprocess_data.py sebelum split
         df['tags'] = df['tags'].fillna('')
         df['Title'] = df['Title'].fillna('')
 
-        # Menggabungkan tiga kolom teks menjadi satu "fitur" besar.
-        # Kolom inilah yang akan dianalisis oleh model.
+        # Menggabungkan fitur teks: Title, Ingredients, Tags.
         df['features'] = df['Title'] + ' ' + df['Ingredients'] + ' ' + df['tags']
-        
-        # --- LANGKAH 3: VEKTORISASI (MENGUBAH TEKS MENJADI ANGKA) ---
-        # Membuat objek TfidfVectorizer untuk mengubah teks menjadi matriks angka.
-        tfidf = TfidfVectorizer(stop_words='english')
-        # Melatih dan mengubah kolom 'features' menjadi matriks TF-IDF.
-        tfidf_matrix = tfidf.fit_transform(df['features'])
-        
-        # --- LANGKAH 4: MENGHITUNG KEMIRIPAN ---
-        # Menghitung matriks kemiripan antar semua resep menggunakan Cosine Similarity.
-        cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
-        # --- LANGKAH 5: MENYIMPAN HASIL ---
-        # Menyimpan objek-objek penting ke dalam folder 'models' agar bisa 
-        # digunakan oleh server API (app.py) tanpa perlu training ulang.
+        # --- LANGKAH 3: VEKTORISASI (LATIH TF-IDF) ---
+        tfidf = TfidfVectorizer(stop_words='english')
+        # Melatih TF-IDF *hanya* pada data training.
+        tfidf_matrix = tfidf.fit_transform(df['features'])
+        print("TF-IDF vectorizer dilatih pada data training.")
+
+        # --- LANGKAH 4: HITUNG KEMIRIPAN ---
+        # Menghitung matriks kemiripan antar resep di data training.
+        cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+        print("Matriks kemiripan dihitung.")
+
+        # --- LANGKAH 5: MENYIMPAN HASIL KE FOLDER 'models' ---
         output_folder = 'models'
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
-        pickle.dump(df, open(os.path.join(output_folder, 'recipes.pkl'), 'wb')) 
+        # Simpan DataFrame training (termasuk ID dan fitur), matriks kemiripan,
+        # matriks TF-IDF, dan objek TF-IDF vectorizer itu sendiri.
+        pickle.dump(df, open(os.path.join(output_folder, 'recipes.pkl'), 'wb'))
         pickle.dump(cosine_sim, open(os.path.join(output_folder, 'cosine_sim.pkl'), 'wb'))
         pickle.dump(tfidf_matrix, open(os.path.join(output_folder, 'tfidf_matrix.pkl'), 'wb'))
-        
-        print(f"\nModel berhasil dibuat dan disimpan di dalam folder '{output_folder}'.")
+        pickle.dump(tfidf, open(os.path.join(output_folder, 'tfidf_vectorizer.pkl'), 'wb'))
 
-    except FileNotFoundError:
-        print("Error: File 'dataset-final.csv' tidak ditemukan. Jalankan 'preprocess_data.py' terlebih dahulu.")
+        print(f"\nModel berhasil dibuat dari data training dan disimpan di folder '{output_folder}'.")
+
     except Exception as e:
-        print(f"Terjadi error: {e}")
+        print(f"Terjadi error saat membuat model: {e}")
 
 if __name__ == "__main__":
     build_model()
