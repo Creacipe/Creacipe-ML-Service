@@ -35,7 +35,14 @@ def recommend_by_title(title_encoded):
     if indices is None: return jsonify({"error": "Model belum siap."}), 503
     try:
         title = unquote(title_encoded)
+        # Ambil index, jika ada duplikat ambil yang pertama
+        if title not in indices:
+            return jsonify({"error": f"Resep dengan judul '{title}' tidak ditemukan."}), 404
+        
         idx = indices[title]
+        # Pastikan idx adalah integer, bukan Series
+        if isinstance(idx, pd.Series):
+            idx = idx.iloc[0]
         sim_scores = list(enumerate(cosine_sim[idx]))
         
         # --- PERUBAHAN DI SINI ---
@@ -66,8 +73,17 @@ def recommend_by_profile():
          return jsonify({"error": "Format parameter 'titles' salah"}), 400
 
     try:
-        profile_indices = [indices[title] for title in favorite_titles if title in indices]
-        if not profile_indices: return jsonify({"error": "Tidak ada resep favorit yang valid"}), 404
+        profile_indices = []
+        for title in favorite_titles:
+            if title in indices:
+                idx = indices[title]
+                # Pastikan idx adalah integer
+                if isinstance(idx, pd.Series):
+                    idx = idx.iloc[0]
+                profile_indices.append(idx)
+        
+        if not profile_indices: 
+            return jsonify({"error": "Tidak ada resep favorit yang valid"}), 404
 
         user_profile_vector = np.asarray(np.mean(tfidf_matrix[profile_indices], axis=0)).flatten()
         sim_scores = cosine_similarity(user_profile_vector.reshape(1, -1), tfidf_matrix)
