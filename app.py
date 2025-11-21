@@ -71,7 +71,6 @@ def recommend_by_profile():
         favorite_titles = [unquote(title) for title in titles_str.split(',')]
     except Exception as e:
          return jsonify({"error": "Format parameter 'titles' salah"}), 400
-
     try:
         profile_indices = []
         for title in favorite_titles:
