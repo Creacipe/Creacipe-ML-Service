@@ -1,65 +1,92 @@
-# app.py (Versi Threshold)
+# app.py 
 
 import pandas as pd
 from flask import Flask, jsonify, request
 import pickle
 import numpy as np
 import os
+import string 
 from sklearn.metrics.pairwise import cosine_similarity
 from urllib.parse import unquote
 
 app = Flask(__name__)
 
-# --- Memuat Model ---
+# --- 1. FUNGSI HELPER (WAJIB SAMA DENGAN COLAB) ---
+def text_cleaning(text):
+    if isinstance(text, str):
+        # Hapus tanda baca & ubah ke huruf kecil
+        text = "".join([c for c in text if c not in string.punctuation])
+        return text.lower().strip()
+    return ''
+
+# --- 2. MEMUAT MODEL ---
 try:
     model_folder = 'models'
+    print("Sedang memuat model...")
+    
+    # Load DataFrame, Cosine Sim, dan TF-IDF Matrix
     recipes_df = pickle.load(open(os.path.join(model_folder, 'recipes.pkl'), 'rb'))
     cosine_sim = pickle.load(open(os.path.join(model_folder, 'cosine_sim.pkl'), 'rb'))
     tfidf_matrix = pickle.load(open(os.path.join(model_folder, 'tfidf_matrix.pkl'), 'rb'))
-    indices = pd.Series(recipes_df.index, index=recipes_df['Title']).drop_duplicates()
-    print("Model (Title-based) berhasil dimuat.")
+    
+    # Mapping Index menggunakan 'Title_Clean'
+    indices = pd.Series(recipes_df.index, index=recipes_df['Title_Clean']).drop_duplicates()
+    
+    print("✅ Model berhasil dimuat.")
 except FileNotFoundError:
-    print("File model tidak ditemukan.")
+    print("❌ ERROR: File model tidak ditemukan. Pastikan folder 'models' berisi 4 file pkl.")
     indices = None
 except Exception as e:
-    print(f"Error saat memuat model: {e}")
+    print(f"❌ ERROR: {e}")
     indices = None
 
-# --- KONFIGURASI THRESHOLD ---
-SIMILARITY_THRESHOLD = 0.22 # Ambil resep dengan skor kemiripan > 0.2
-# -----------------------------
+# --- KONFIGURASI ---
+SIMILARITY_THRESHOLD = 0.25  # Ambang batas kemiripan
 
-# --- Endpoint Rekomendasi General (Resep Serupa by Title) ---
+# --- Endpoint 1: Rekomendasi Klik Resep (by Title) ---
 @app.route("/recommend/title/<string:title_encoded>", methods=['GET'])
 def recommend_by_title(title_encoded):
     if indices is None: return jsonify({"error": "Model belum siap."}), 503
+    
     try:
-        title = unquote(title_encoded)
-        # Ambil index, jika ada duplikat ambil yang pertama
-        if title not in indices:
-            return jsonify({"error": f"Resep dengan judul '{title}' tidak ditemukan."}), 404
+        # 1. Bersihkan Input
+        title_raw = unquote(title_encoded)
+        title_clean = text_cleaning(title_raw)
         
-        idx = indices[title]
-        # Pastikan idx adalah integer, bukan Series
-        if isinstance(idx, pd.Series):
-            idx = idx.iloc[0]
+        # 2. Cek Database
+        if title_clean not in indices:
+            return jsonify({"error": f"Resep '{title_raw}' tidak ditemukan."}), 404
+        
+        idx = indices[title_clean]
+        if isinstance(idx, pd.Series): idx = idx.iloc[0]
+        
+        # 3. Hitung Kemiripan
         sim_scores = list(enumerate(cosine_sim[idx]))
         
-        # --- PERUBAHAN DI SINI ---
-        # Filter skor yang di atas threshold (abaikan diri sendiri)
-        recommended_indices = [i for i, score in sim_scores if score > SIMILARITY_THRESHOLD and i != idx]
-        # Urutkan berdasarkan skor (opsional, tapi bagus)
+        # 4. Filter & Sort
+        recommended_indices = []
+        for i, score in sim_scores:
+            if i == idx: continue # Skip diri sendiri
+            
+            # Hanya ambil yang nilainya relevan (di atas 0.2)
+            if score > SIMILARITY_THRESHOLD:
+                recommended_indices.append(i)
+        
+        # Urutkan dari skor tertinggi
         recommended_indices = sorted(recommended_indices, key=lambda i: sim_scores[i][1], reverse=True)
-        # -------------------------
+        
+        # CATATAN: Tidak ada slicing [:20] di sini.
+        # Semua hasil dikirim ke Golang.
 
-        return jsonify(recipes_df['Title'].iloc[recommended_indices].tolist())
-    except KeyError:
-        return jsonify({"error": f"Resep dengan judul '{title}' tidak ditemukan."}), 404
+        # 5. Return Data Lengkap
+        result = recipes_df[['Title', 'Ingredients', 'Category']].iloc[recommended_indices]
+        return jsonify(result.to_dict(orient='records'))
+
     except Exception as e:
-        print(f"Error di /recommend/title/{title_encoded}: {e}")
-        return jsonify({"error": "Terjadi kesalahan internal"}), 500
+        print(f"Error: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
 
-# --- Endpoint Rekomendasi Personal (by Titles) ---
+# --- Endpoint 2: Rekomendasi Profil (Personalized) ---
 @app.route("/recommend/profile", methods=['GET'])
 def recommend_by_profile():
     if indices is None: return jsonify({"error": "Model belum siap."}), 503
@@ -68,44 +95,48 @@ def recommend_by_profile():
     if not titles_str: return jsonify({"error": "Parameter 'titles' dibutuhkan"}), 400
 
     try:
-        favorite_titles = [unquote(title) for title in titles_str.split(',')]
-    except Exception as e:
-         return jsonify({"error": "Format parameter 'titles' salah"}), 400
-    try:
+        # 1. Parse Input
+        raw_titles = [unquote(t) for t in titles_str.split(',')]
         profile_indices = []
-        for title in favorite_titles:
-            if title in indices:
-                idx = indices[title]
-                # Pastikan idx adalah integer
-                if isinstance(idx, pd.Series):
-                    idx = idx.iloc[0]
+        
+        for t in raw_titles:
+            t_clean = text_cleaning(t)
+            if t_clean in indices:
+                idx = indices[t_clean]
+                if isinstance(idx, pd.Series): idx = idx.iloc[0]
                 profile_indices.append(idx)
         
         if not profile_indices: 
             return jsonify({"error": "Tidak ada resep favorit yang valid"}), 404
 
+        # 2. Hitung Rata-rata Vektor User
         user_profile_vector = np.asarray(np.mean(tfidf_matrix[profile_indices], axis=0)).flatten()
-        sim_scores = cosine_similarity(user_profile_vector.reshape(1, -1), tfidf_matrix)
-        sim_scores = list(enumerate(sim_scores[0]))
+        
+        # 3. Hitung Kemiripan dengan Semua Resep
+        from sklearn.metrics.pairwise import cosine_similarity
+        sim_scores = cosine_similarity(user_profile_vector.reshape(1, -1), tfidf_matrix)[0]
+        
+        # 4. Filter Hasil
+        recommended_indices = []
+        for i, score in enumerate(sim_scores):
+            if i in profile_indices: continue # Skip yang sudah dilike
+            
+            if score > SIMILARITY_THRESHOLD:
+                recommended_indices.append(i)
+        
+        # Urutkan
+        recommended_indices = sorted(recommended_indices, key=lambda i: sim_scores[i], reverse=True)
+        
+        # CATATAN: Tidak ada slicing [:20]. Semua dikirim.
+        
+        # 5. Return Data Lengkap
+        result = recipes_df[['Title', 'Ingredients', 'Category']].iloc[recommended_indices]
+        return jsonify(result.to_dict(orient='records'))
 
-        # --- PERUBAHAN DI SINI ---
-        # Filter skor di atas threshold DAN yang bukan favorit user
-        recommended_menu_indices = []
-        for i, score in sim_scores:
-             if score > SIMILARITY_THRESHOLD and i < len(recipes_df): # Pastikan index valid
-                 # Cek apakah judul rekomendasi tidak ada di daftar favorit
-                 if recipes_df['Title'].iloc[i] not in favorite_titles:
-                     recommended_menu_indices.append(i)
-        # Urutkan berdasarkan skor (opsional)
-        recommended_menu_indices = sorted(recommended_menu_indices, key=lambda i: sim_scores[i][1], reverse=True)
-        # -------------------------
-
-        return jsonify(recipes_df['Title'].iloc[recommended_menu_indices].tolist())
     except Exception as e:
-        print(f"Error di /recommend/profile: {e}")
-        return jsonify({"error": "Terjadi kesalahan internal saat membuat profil"}), 500
+        print(f"Error Profile: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
 
-# --- Endpoint Lainnya ---
 @app.route("/ping", methods=['GET'])
 def ping(): return jsonify({"message": "pong!"})
 
