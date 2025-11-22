@@ -53,7 +53,7 @@ except Exception as e:
     indices = None
 
 # --- KONFIGURASI ---
-SIMILARITY_THRESHOLD = 0.25  # Ambang batas kemiripan
+SIMILARITY_THRESHOLD = 0.20  # Ambang batas kemiripan
 
 # --- Endpoint 1: Rekomendasi Klik Resep (by Title) ---
 @app.route("/recommend/title/<string:title_encoded>", methods=['GET'])
@@ -82,22 +82,26 @@ def recommend_by_title(title_encoded):
         sim_scores = list(enumerate(cosine_sim[idx]))
         
         # 4. Filter & Sort
-        recommended_indices = []
-        for i, score in sim_scores:
-            if i == idx: continue # Skip diri sendiri
-            
-            # Hanya ambil yang nilainya relevan (di atas threshold)
-            if score > SIMILARITY_THRESHOLD:
-                recommended_indices.append(i)
+        # Filter yang di atas threshold dan bukan diri sendiri
+        sim_scores = [(i, score) for i, score in sim_scores if i != idx and score > SIMILARITY_THRESHOLD]
         
-        # Urutkan dari skor tertinggi
-        recommended_indices = sorted(recommended_indices, key=lambda i: sim_scores[i][1], reverse=True)
+        # Sort by score descending (no limit, frontend will handle pagination)
+        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
         
-        print(f"✅ Ditemukan {len(recommended_indices)} rekomendasi")
+        print(f"✅ Ditemukan {len(sim_scores)} rekomendasi")
 
-        # 5. Return Data Lengkap
-        result = recipes_df[['Title', 'Ingredients', 'Category']].iloc[recommended_indices]
-        return jsonify(result.to_dict(orient='records'))
+        # 5. Return hanya Title (array of strings) untuk Go backend
+        recommended_indices = [i for i, _ in sim_scores]
+        titles = recipes_df['Title'].iloc[recommended_indices].tolist()
+        
+        # 6. Filter: Exclude title yang sama dengan input (case-insensitive)
+        # Karena bisa ada duplikat title di dataset
+        title_raw_lower = title_raw.lower()
+        filtered_titles = [t for t in titles if t.lower() != title_raw_lower]
+        
+        print(f"✅ Setelah filter duplikat: {len(filtered_titles)} rekomendasi unik")
+        
+        return jsonify(filtered_titles)
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -143,22 +147,20 @@ def recommend_by_profile():
         # 3. Hitung Kemiripan dengan Semua Resep
         sim_scores = calc_cosine(user_profile_vector.reshape(1, -1), tfidf_matrix)[0]
         
-        # 4. Filter Hasil
-        recommended_indices = []
-        for i, score in enumerate(sim_scores):
-            if i in profile_indices: continue # Skip yang sudah dilike
-            
-            if score > SIMILARITY_THRESHOLD:
-                recommended_indices.append(i)
+        # 4. Filter & Sort
+        # Buat list (index, score) untuk yang belum dilike
+        candidates = [(i, score) for i, score in enumerate(sim_scores) 
+                     if i not in profile_indices and score > SIMILARITY_THRESHOLD]
         
-        # Urutkan
-        recommended_indices = sorted(recommended_indices, key=lambda i: sim_scores[i], reverse=True)
+        # Sort by score descending (no limit, frontend will handle pagination)
+        candidates = sorted(candidates, key=lambda x: x[1], reverse=True)
         
-        print(f"✅ Ditemukan {len(recommended_indices)} rekomendasi")
+        print(f"✅ Ditemukan {len(candidates)} rekomendasi")
         
-        # 5. Return Data Lengkap
-        result = recipes_df[['Title', 'Ingredients', 'Category']].iloc[recommended_indices]
-        return jsonify(result.to_dict(orient='records'))
+        # 5. Return hanya Title (array of strings) untuk Go backend
+        recommended_indices = [i for i, _ in candidates]
+        titles = recipes_df['Title'].iloc[recommended_indices].tolist()
+        return jsonify(titles)
 
     except Exception as e:
         print(f"❌ Error Profile: {e}")
