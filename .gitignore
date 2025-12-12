@@ -1,7 +1,8 @@
 # Folder Virtual Environment
 .venv/
 venv/
-
+.env
+.env/
 # Folder Cache Python
 __pycache__/
 
